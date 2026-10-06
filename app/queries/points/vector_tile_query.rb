@@ -25,6 +25,10 @@ class Points::VectorTileQuery
   LAYER_NAME = 'points'
   TILE_PIXELS = 512
   WEB_MERCATOR_WORLD = 40_075_016.685578488
+  # Widest on-screen gap a LOD tier may leave between kept points, measured
+  # where it is widest: at the tile's poleward edge, just before the next zoom
+  # (MapLibre stretches tile z up to 2x). Well inside a 6 px marker radius.
+  LOD_MAX_GAP_PX = 5
   # Bounds the per-query cost (VectorTileTimeout, ENV-overridable);
   # PgBouncer-safe because SET LOCAL runs inside an explicit transaction
   # (see Visits::Detection::CandidateLoader for the pattern)
@@ -174,6 +178,7 @@ class Points::VectorTileQuery
       FROM (#{tile_scope.to_sql}) AS points
       WHERE points.lonlat IS NOT NULL
         #{spatial_prefilter(shift)}
+        #{lod_prefilter}
         AND ST_Intersects(
           points.lonlat::geometry,
           ST_Transform(#{margined_envelope(shift)}, 4326)
@@ -219,6 +224,26 @@ class Points::VectorTileQuery
     "AND points.lonlat && ST_Transform(#{margined_envelope(shift)}, 4326)::geography"
   end
 
+  def lod_prefilter
+    return '' unless DawarichSettings.points_lod_enabled?
+
+    tier = lod_tier
+    return '' if tier <= Points::Lod::Chain::FINEST_LOG2_M
+
+    "AND points.d_log2 >= #{tier}"
+  end
+
+  def lod_tier
+    poleward_lat = [tile_edge_lat(y), tile_edge_lat(y + 1)].map(&:abs).max
+    meters_per_px = WEB_MERCATOR_WORLD * Math.cos(poleward_lat) / (TILE_PIXELS * (1 << (z + 1)))
+
+    Math.log2(LOD_MAX_GAP_PX * meters_per_px).floor.clamp(..Points::Lod::Chain::COARSEST_LOG2_M)
+  end
+
+  def tile_edge_lat(row)
+    Math.atan(Math.sinh(Math::PI * (1 - (2.0 * row / (1 << z)))))
+  end
+
   def snap_expression
     "ST_SnapToGrid(geom_3857, #{cell_size})"
   end
@@ -232,9 +257,11 @@ class Points::VectorTileQuery
   end
 
   def tile_scope
-    scope.except(:select, :order, :includes, :preload, :eager_load)
-         .select(:id, :timestamp, :battery, :altitude, :velocity, :lonlat,
-                 :track_id, :lock_version)
+    columns = %i[id timestamp battery altitude velocity lonlat track_id lock_version]
+    # Only with the feature on, so the off path's SQL stays as it was.
+    columns << :d_log2 if DawarichSettings.points_lod_enabled?
+
+    scope.except(:select, :order, :includes, :preload, :eager_load).select(*columns)
   end
 
   def with_statement_timeout

@@ -124,3 +124,9 @@ stats_toponyms_refresh_job:
   cron: "*/5 * * * *"
   class: "Stats::ToponymsRefreshJob"
   queue: stats
+
+points_lod_scheduling_job:
+  cron: "*/5 * * * *"
+  class: "Points::LodSchedulingJob"
+  queue: low_priority
+  description: "Enqueue Points::LodJob for users with pending or dirty-anomaly LOD points"
