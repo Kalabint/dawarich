@@ -69,6 +69,10 @@ class DawarichSettings
       ENV['PROMETHEUS_EXPORTER_ENABLED'].to_s == 'true'
     end
 
+    def points_lod_enabled?
+      ENV['POINTS_LOD_ENABLED'].to_s == 'true'
+    end
+
     def email_configured?
       ENV['SMTP_SERVER'].present?
     end
